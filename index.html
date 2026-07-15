@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Concrete Depth Emboss</title>
+<style>
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ height:100%; overflow:hidden; background:#dcdcda; }
+  #gl{ display:block; width:100vw; height:100vh; cursor:crosshair; }
+</style>
+</head>
+<body>
+  <canvas id="gl"></canvas>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+  import * as THREE from 'three';
+  import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+  import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
+  // ============================================================
+  // EDITABLE SETTINGS (all also live in the control panel)
+  // ============================================================
+  const settings = {
+    // texture
+    textureSize:     1.6,   // world units one concrete tile covers
+    textureStrength: 0.45,  // 0 = plain color, 1 = full concrete texture
+    normalStrength:  0.35,  // surface grain in the lighting
+    roughness:       0.9,   // matte concrete; lower = shinier
+    baseColor:       '#d6d4d0',
+
+    // light
+    lightIntensity:  2.2,
+    lightX:          2.5,
+    lightY:          3.0,
+    lightZ:          4.0,
+    ambient:         0.55,
+    shadows:         true,
+
+    // reveal
+    radius:          0.55,
+    feather:         0.45,
+
+    // ink (animated noise that gives the reveal edge its organic look)
+    inkStrength:     0.18,   // how strongly the ink displaces the reveal edge
+    inkSpeed:        0.4,    // how fast the ink flows/evolves over time
+    inkDistortion:   0.5,    // amount of swirl/warp applied to the flow
+  };
+
+  const canvas = document.getElementById('gl');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  const scene  = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
+  camera.position.set(0, 0, 3.4);
+
+  // ------------------------------------------------------------
+  // TEXTURES — one concrete set shared by EVERYTHING
+  // ------------------------------------------------------------
+  const tl = new THREE.TextureLoader();
+  function tex(file, srgb){
+    const t = tl.load(file);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+  const mapColor  = tex('PolishedConcrete01_1K_BaseColor.avif', true);
+  const mapNormal = tex('PolishedConcrete01_1K_Normal.avif');
+  const mapRough  = tex('PolishedConcrete01_1K_Roughness.avif');
+  const maskNoise = tex('mask-noise.avif');
+
+  function applyRepeat(){
+    const r = 1 / settings.textureSize;
+    [mapColor, mapNormal, mapRough].forEach(t => t.repeat.set(r, r));
+  }
+  applyRepeat();
+
+  // ------------------------------------------------------------
+  // Shared reveal uniforms
+  // ------------------------------------------------------------
+  const u = {
+    uMouseWorld:    { value: new THREE.Vector3(9999, 9999, 0) },
+    uRadius:        { value: settings.radius },
+    uFeather:       { value: settings.feather },
+    uMask:          { value: maskNoise },
+    uTexStrength:   { value: settings.textureStrength },
+    uTime:          { value: 0 },
+    uInkStrength:   { value: settings.inkStrength },
+    uInkSpeed:      { value: settings.inkSpeed },
+    uInkDistortion: { value: settings.inkDistortion },
+  };
+
+  // ------------------------------------------------------------
+  // ONE material for model + background = seamless by definition
+  // ------------------------------------------------------------
+  function makeConcrete(){
+    const m = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(settings.baseColor),
+      map: mapColor,
+      normalMap: mapNormal,
+      roughnessMap: mapRough,
+      roughness: settings.roughness,
+      metalness: 0.0,                       // <- no metal look, ever
+      normalScale: new THREE.Vector2(settings.normalStrength, settings.normalStrength),
+    });
+    // subtle-texture control: fade the base-color map toward flat white
+    m.onBeforeCompile = (shader) => {
+      shader.uniforms.uTexStrength = u.uTexStrength;
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float uTexStrength;')
+        .replace('#include <map_fragment>', `
+          #ifdef USE_MAP
+            vec4 sampledDiffuseColor = texture2D( map, vMapUv );
+            sampledDiffuseColor.rgb = mix( vec3(1.0), sampledDiffuseColor.rgb, uTexStrength );
+            diffuseColor *= sampledDiffuseColor;
+          #endif
+        `);
+    };
+    return m;
+  }
+
+  // GLSL snippet: compute reveal from XY distance to the mouse
+  const revealVertexChunk = `
+    float dRev = distance(position.xy, uMouseWorld.xy);
+
+    // animated ink: the mask scrolls over time and gets warped by a
+    // second, offset sine field so it flows/swirls instead of just sliding
+    float inkT = uTime * uInkSpeed;
+    vec2 inkUV = position.xy / 1.4 + vec2(inkT * 0.06, inkT * 0.04);
+    vec2 inkWarp = vec2(
+      sin(inkUV.y * 6.2831853 + inkT * 1.7),
+      cos(inkUV.x * 6.2831853 - inkT * 1.3)
+    ) * uInkDistortion * 0.12;
+    float nRev = texture2D(uMask, inkUV + inkWarp).r;
+    dRev += (nRev - 0.5) * uInkStrength;
+
+    float reveal = 1.0 - smoothstep(uRadius - uFeather, uRadius + uFeather, dRev);
+  `;
+
+  function injectReveal(shader, hasNormals){
+    Object.assign(shader.uniforms, {
+      uMouseWorld: u.uMouseWorld, uRadius: u.uRadius, uFeather: u.uFeather,
+      uMask: u.uMask, uTime: u.uTime, uInkStrength: u.uInkStrength,
+      uInkSpeed: u.uInkSpeed, uInkDistortion: u.uInkDistortion,
+    });
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <common>',
+      `#include <common>
+       uniform vec3 uMouseWorld;
+       uniform float uRadius, uFeather, uInkStrength, uInkSpeed, uInkDistortion, uTime;
+       uniform sampler2D uMask;`
+    );
+    if (hasNormals){
+      // compute reveal early, bend the normal with the inflation
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <beginnormal_vertex>',
+        `#include <beginnormal_vertex>
+         ${revealVertexChunk}
+         objectNormal = normalize(mix(vec3(0.0, 0.0, 1.0), objectNormal, reveal));`
+      );
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         transformed.z *= reveal;`
+      );
+    } else {
+      // depth material (shadow pass): displacement only
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         ${revealVertexChunk}
+         transformed.z *= reveal;`
+      );
+    }
+  }
+
+  // ------------------------------------------------------------
+  // BACKGROUND — same concrete material, receives shadows
+  // ------------------------------------------------------------
+  const bgGeo = new THREE.PlaneGeometry(30, 30);
+  {
+    // planar world-unit UVs so texel density matches the model exactly
+    const pos = bgGeo.attributes.position;
+    const uv = new Float32Array(pos.count * 2);
+    for (let i = 0; i < pos.count; i++){
+      uv[i*2] = pos.getX(i); uv[i*2+1] = pos.getY(i);
+    }
+    bgGeo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  }
+  const bgMat = makeConcrete();
+  const bg = new THREE.Mesh(bgGeo, bgMat);
+  bg.position.z = -0.001;
+  bg.receiveShadow = true;
+  scene.add(bg);
+
+  // ------------------------------------------------------------
+  // MODEL — same material + injected depth reveal + shadow pass
+  // ------------------------------------------------------------
+  const modelMat = makeConcrete();
+  const baseCompile = modelMat.onBeforeCompile;
+  modelMat.onBeforeCompile = (shader) => {
+    baseCompile(shader);
+    injectReveal(shader, true);
+  };
+
+  const depthMat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  depthMat.onBeforeCompile = (shader) => injectReveal(shader, false);
+
+  new GLTFLoader().load('index.glb', (gltf) => {
+    // Collect meshes FIRST. Calling scene.add(c) below reparents each mesh,
+    // which mutates its old parent's children array. Doing that while
+    // traverse() is still walking that same array corrupts the iteration
+    // (any model with >1 mesh under a parent will throw). So: gather, then mutate.
+    const meshes = [];
+    gltf.scene.traverse((c) => { if (c.isMesh) meshes.push(c); });
+
+    meshes.forEach((c) => {
+      const g = c.geometry;
+      g.computeVertexNormals();
+
+      // bake center+fit into the geometry so object space == world space
+      g.computeBoundingBox();
+      const bb = g.boundingBox;
+      const size = new THREE.Vector3(); bb.getSize(size);
+      const center = new THREE.Vector3(); bb.getCenter(center);
+      g.translate(-center.x, -center.y, -bb.min.z);   // relief sits ON the paper
+      const fit = 2.0 / Math.max(size.x, size.y);
+      g.scale(fit, fit, fit);
+
+      // planar world-unit UVs (same density as background)
+      const pos = g.attributes.position;
+      const uv = new Float32Array(pos.count * 2);
+      for (let i = 0; i < pos.count; i++){
+        uv[i*2] = pos.getX(i); uv[i*2+1] = pos.getY(i);
+      }
+      g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+
+      c.material = modelMat;
+      c.customDepthMaterial = depthMat;   // shadows follow the displacement
+      c.castShadow = true;
+      c.receiveShadow = true;
+      c.frustumCulled = false;
+      scene.add(c);
+    });
+  }, undefined, (err) => {
+    console.error('Failed to load index.glb:', err);
+  });
+
+  // ------------------------------------------------------------
+  // LIGHTS
+  // ------------------------------------------------------------
+  const sun = new THREE.DirectionalLight(0xffffff, settings.lightIntensity);
+  sun.position.set(settings.lightX, settings.lightY, settings.lightZ);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -3; sun.shadow.camera.right = 3;
+  sun.shadow.camera.top = 3;  sun.shadow.camera.bottom = -3;
+  sun.shadow.camera.near = 0.5; sun.shadow.camera.far = 15;
+  sun.shadow.bias = -0.0005;
+  sun.shadow.normalBias = 0.02;
+  scene.add(sun);
+
+  const ambient = new THREE.AmbientLight(0xffffff, settings.ambient);
+  scene.add(ambient);
+
+  // ------------------------------------------------------------
+  // CONTROL PANEL
+  // ------------------------------------------------------------
+  const gui = new GUI({ title: 'Scene Controls' });
+
+  const fTex = gui.addFolder('Texture');
+  fTex.add(settings, 'textureSize', 0.3, 6, 0.05).name('tile size').onChange(applyRepeat);
+  fTex.add(settings, 'textureStrength', 0, 1, 0.01).name('strength')
+      .onChange(v => u.uTexStrength.value = v);
+  fTex.add(settings, 'normalStrength', 0, 1.5, 0.01).name('grain (normal)')
+      .onChange(v => { bgMat.normalScale.set(v, v); modelMat.normalScale.set(v, v); });
+  fTex.add(settings, 'roughness', 0.2, 1, 0.01)
+      .onChange(v => { bgMat.roughness = v; modelMat.roughness = v; });
+  fTex.addColor(settings, 'baseColor').name('base color')
+      .onChange(v => { bgMat.color.set(v); modelMat.color.set(v); });
+
+  const fLight = gui.addFolder('Light');
+  fLight.add(settings, 'lightIntensity', 0, 6, 0.05).name('intensity')
+        .onChange(v => sun.intensity = v);
+  fLight.add(settings, 'lightX', -6, 6, 0.1).onChange(v => sun.position.x = v);
+  fLight.add(settings, 'lightY', -6, 6, 0.1).onChange(v => sun.position.y = v);
+  fLight.add(settings, 'lightZ',  0.5, 10, 0.1).onChange(v => sun.position.z = v);
+  fLight.add(settings, 'ambient', 0, 2, 0.01)
+        .onChange(v => ambient.intensity = v);
+  fLight.add(settings, 'shadows').onChange(v => {
+    renderer.shadowMap.enabled = v;
+    bgMat.needsUpdate = modelMat.needsUpdate = true;
+  });
+
+  const fReveal = gui.addFolder('Reveal');
+  fReveal.add(settings, 'radius', 0.1, 2, 0.01).onChange(v => u.uRadius.value = v);
+  fReveal.add(settings, 'feather', 0.05, 1.5, 0.01).onChange(v => u.uFeather.value = v);
+
+  const fInk = gui.addFolder('Ink');
+  fInk.add(settings, 'inkStrength', 0, 0.6, 0.01).name('strength')
+      .onChange(v => u.uInkStrength.value = v);
+  fInk.add(settings, 'inkSpeed', 0, 3, 0.01).name('speed')
+      .onChange(v => u.uInkSpeed.value = v);
+  fInk.add(settings, 'inkDistortion', 0, 2, 0.01).name('distortion')
+      .onChange(v => u.uInkDistortion.value = v);
+
+  // ------------------------------------------------------------
+  // MOUSE -> world point on the paper plane, eased follow
+  // ------------------------------------------------------------
+  const raycaster = new THREE.Raycaster();
+  const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+  const ndc = new THREE.Vector2();
+  const hit = new THREE.Vector3();
+  const mouseTarget = new THREE.Vector3(9999, 9999, 0);
+  let hasMouse = false;
+
+  function setMouse(x, y){
+    ndc.set((x / window.innerWidth) * 2 - 1, -(y / window.innerHeight) * 2 + 1);
+    raycaster.setFromCamera(ndc, camera);
+    if (raycaster.ray.intersectPlane(plane, hit)){
+      mouseTarget.copy(hit); hasMouse = true;
+    }
+  }
+  window.addEventListener('pointermove', e => setMouse(e.clientX, e.clientY));
+  window.addEventListener('pointerleave', () => hasMouse = false);
+  window.addEventListener('touchmove', e => {
+    if (e.touches[0]) setMouse(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive:true });
+
+  // ------------------------------------------------------------
+  // Resize + loop
+  // ------------------------------------------------------------
+  function resize(){
+    renderer.setSize(window.innerWidth, window.innerHeight, false);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const clock = new THREE.Clock();
+  const away = new THREE.Vector3(9999, 9999, 0);
+  renderer.setAnimationLoop(() => {
+    const dt = Math.min(clock.getDelta(), 0.05);
+    u.uMouseWorld.value.lerp(hasMouse ? mouseTarget : away, 1 - Math.exp(-6 * dt));
+    u.uTime.value += dt;
+    renderer.render(scene, camera);
+  });
+  </script>
+</body>
+</html>
