@@ -603,7 +603,7 @@ get disposed(){ return disposed; },
 };
 ctl.instance = instance;
 if (ctl.cancelled){ dispose(); return; }
-const modelUrl = 'https://cdn.jsdelivr.net/gh/tadasba329/BA329-NEUE@13b32f0cdb25a950f411afec664f93784ff7ac46/index-new-update-v2-cut-optimized.glb';
+const modelUrl = 'https://cdn.jsdelivr.net/gh/tadasba329/BA329-NEUE@cae8e094c68f48154569def9fc673915bc718ad6/index-new-update-v2-cut-optimized.glb';
 dracoLoader.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/');
 const gltfLoader = new GLTFLoader();
 gltfLoader.setDRACOLoader(dracoLoader);
