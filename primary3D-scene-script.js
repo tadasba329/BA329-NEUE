@@ -211,6 +211,7 @@ uModelScl:      { value: 1.0 },
 uModelOff:      { value: new THREE.Vector3(0, 0, settings.modelOffsetZ) },
 uShadowClip:    { value: settings.shadowClip },
 uModelLift:     { value: settings.modelShadowLift },
+uModelRough:    { value: settings.modelRoughness },
 uDrops:    { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(9999, 9999, 0, 0)) },
 uDropsAux: { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(0, 0, 0.09, 0)) },
 uDropsStretch: { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(1, 0, 1, 0)) },
@@ -348,8 +349,11 @@ modelMat.onBeforeCompile = (shader) => {
 baseCompile(shader);
 injectReveal(shader, true);
 shader.uniforms.uModelLift = u.uModelLift;
+shader.uniforms.uModelRough = u.uModelRough;
 shader.fragmentShader = shader.fragmentShader
-.replace('#include <common>', '#include <common>\nuniform float uModelLift;')
+.replace('#include <common>', '#include <common>\nuniform float uModelLift;\nuniform float uModelRough;')
+.replace('#include <roughnessmap_fragment>',
+'#include <roughnessmap_fragment>\nroughnessFactor = clamp(uModelRough, 0.045, 1.0);')
 .replace(
 'vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;',
 `vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;
@@ -363,7 +367,7 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 const envRT = track(pmrem.fromScene(new RoomEnvironment(), 0.04));
 pmrem.dispose();
 modelMat.envMap = envRT.texture;
-modelMat.envMapIntensity = settings.modelReflection;
+modelMat.envMapIntensity = 0.7;
 }
 const depthMat = track(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }));
 depthMat.onBeforeCompile = (shader) => injectReveal(shader, false);
@@ -986,9 +990,7 @@ bgMat.color.set(v); modelMat.color.set(v);
 }));
 fSurf.close();
 const fMat = gui.addFolder('Model material');
-fMat.add(settings, 'modelRoughness', 0, 1, 0.01).name('Matte (1) / shiny (0)').onChange(W(v => modelMat.roughness = v));
-fMat.add(settings, 'modelMetalness', 0, 1, 0.01).name('Metalness').onChange(W(v => modelMat.metalness = v));
-fMat.add(settings, 'modelReflection', 0, 3, 0.01).name('Reflections').onChange(W(v => modelMat.envMapIntensity = v));
+fMat.add(settings, 'modelRoughness', 0, 1, 0.01).name('Matte amount').onChange(W(v => { u.uModelRough.value = v; modelMat.roughness = v; }));
 const fLight = gui.addFolder('Model light');
 fLight.add(settings, 'lightIntensity', 0, 10, 0.01).name('Intensity').onChange(W(applyModelLight));
 fLight.add(settings, 'lightX', -15, 15, 0.1).name('X').onChange(W(applyModelLight));
