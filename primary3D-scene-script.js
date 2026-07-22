@@ -118,17 +118,18 @@ lightY:          15,
 lightZ:          15,
 ambient:         3.89,
 modelShadowLift: 0.0,
+modelShadowDeep: 0.0,   // multiplies the model's dark sides darker (0 = off)
 shadows:          true,
-shadowStrength:   1.68,   // how dark the cast shadow is
-shadowX:          15,
+shadowStrength:   1.87,   // how dark the cast shadow is
+shadowX:          6.9,
 shadowY:          2.5,
-shadowZ:          6,
-shadowBias:       0.0006,
-shadowNormalBias: 0.038,
-shadowSoftness:   1.5,
-shadowClip:       0.26,
-shadowFalloffSize:    3.0,  // how much wider the falloff layer blurs vs Softness
-shadowFalloffOpacity: 0.5,  // darkness of the falloff layer (0 = single shadow)
+shadowZ:          3.6,
+shadowBias:       0.0014,
+shadowNormalBias: 0.03,
+shadowSoftness:   5.3,
+shadowClip:       0.46,
+shadowFalloffSize:    1.7,  // how much wider the falloff layer blurs vs Softness
+shadowFalloffOpacity: 1.5,  // darkness of the falloff layer (0 = single shadow)
 radius:          0.27,
 feather:         0.05,
 hoverDepth:      0.43,
@@ -212,6 +213,8 @@ uModelScl:      { value: 1.0 },
 uModelOff:      { value: new THREE.Vector3(0, 0, settings.modelOffsetZ) },
 uShadowClip:    { value: settings.shadowClip },
 uModelLift:     { value: settings.modelShadowLift },
+uModelDeep:     { value: settings.modelShadowDeep },
+uShadeNorm:     { value: settings.lightIntensity + settings.ambient },
 uModelRough:    { value: settings.modelRoughness },
 uDrops:    { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(9999, 9999, 0, 0)) },
 uDropsAux: { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(0, 0, 0.09, 0)) },
@@ -350,14 +353,20 @@ modelMat.onBeforeCompile = (shader) => {
 baseCompile(shader);
 injectReveal(shader, true);
 shader.uniforms.uModelLift = u.uModelLift;
+shader.uniforms.uModelDeep = u.uModelDeep;
+shader.uniforms.uShadeNorm = u.uShadeNorm;
 shader.uniforms.uModelRough = u.uModelRough;
 shader.fragmentShader = shader.fragmentShader
-.replace('#include <common>', '#include <common>\nuniform float uModelLift;\nuniform float uModelRough;')
+.replace('#include <common>', '#include <common>\nuniform float uModelLift, uModelDeep, uShadeNorm;\nuniform float uModelRough;')
 .replace('#include <roughnessmap_fragment>',
 '#include <roughnessmap_fragment>\nroughnessFactor = clamp(uModelRough, 0.045, 1.0);')
 .replace(
 'vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;',
 `vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;
+float mLum = dot(totalDiffuse, vec3(0.2126, 0.7152, 0.0722));
+float mRef = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722)) * max(uShadeNorm, 0.001);
+float mLit = smoothstep(0.0, 1.0, clamp(mLum / max(mRef, 0.001), 0.0, 1.0));
+totalDiffuse *= mix(max(1.0 - uModelDeep, 0.0), 1.0, mLit);
 totalDiffuse = max(totalDiffuse, diffuseColor.rgb * uModelLift);`
 );
 };
@@ -439,6 +448,7 @@ bgMat.needsUpdate = true;
 modelMat.needsUpdate = true;
 }
 function applyModelLight(){
+u.uShadeNorm.value = settings.lightIntensity + settings.ambient;
 sun.intensity = settings.lightIntensity;
 sun.position.set(settings.lightX, settings.lightY, settings.lightZ);
 ambient.intensity = settings.ambient;
@@ -1018,6 +1028,7 @@ fLight.add(settings, 'lightY', -15, 15, 0.1).name('Y').onChange(W(applyModelLigh
 fLight.add(settings, 'lightZ', 0.5, 15, 0.1).name('Z').onChange(W(applyModelLight));
 fLight.add(settings, 'ambient', 0, 5, 0.01).name('Ambient').onChange(W(applyModelLight));
 fLight.add(settings, 'modelShadowLift', 0, 6, 0.01).name('Shadow lift (model)').onChange(W(v => u.uModelLift.value = v));
+fLight.add(settings, 'modelShadowDeep', 0, 1, 0.01).name('Shadow deepen (model)').onChange(W(v => u.uModelDeep.value = v));
 const fShadow = gui.addFolder('Model cast shadow');
 fShadow.add(settings, 'shadows').name('Enabled').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowStrength', 0, 5, 0.01).name('Shadow opacity').onChange(W(applyShadowSettings));
