@@ -77,7 +77,6 @@ const { DRACOLoader } = await import('three/addons/loaders/DRACOLoader.js');
 const { GLTFLoader }  = await import('three/addons/loaders/GLTFLoader.js');
 const BufferGeometryUtils = await import('three/addons/utils/BufferGeometryUtils.js');
 const { EdgeSplitModifier } = await import('three/addons/modifiers/EdgeSplitModifier.js');
-const { RoomEnvironment }   = await import('three/addons/environments/RoomEnvironment.js');
 if (ctl.cancelled) return;
 const ac = new AbortController();
 const on = (target, type, fn, opts) =>
@@ -361,14 +360,7 @@ totalDiffuse = max(totalDiffuse, diffuseColor.rgb * uModelLift);`
 );
 };
 modelMat.roughness = settings.modelRoughness;
-modelMat.metalness = settings.modelMetalness;
-{
-const pmrem = new THREE.PMREMGenerator(renderer);
-const envRT = track(pmrem.fromScene(new RoomEnvironment(), 0.04));
-pmrem.dispose();
-modelMat.envMap = envRT.texture;
-modelMat.envMapIntensity = 0.7;
-}
+modelMat.metalness = 0.0;
 const depthMat = track(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }));
 depthMat.onBeforeCompile = (shader) => injectReveal(shader, false);
 const sun = new THREE.DirectionalLight(0xffffff, settings.lightIntensity);
