@@ -99,12 +99,12 @@ if (srgb) t.colorSpace = THREE.SRGBColorSpace;
 return track(t);
 }
 const settings = {
-textureSize:     0.75,
-textureStrength: 0.32,
-normalStrength:  1.08,
-roughness:       0.78,
-baseColor:       '#ffffff',
-modelRoughness:  0.78,
+textureSize:     0.1,
+textureStrength: 0.31,
+normalStrength:  0.75,
+roughness:       0.86,
+baseColor:       '#f2f0ed',
+modelRoughness:  1.0,
 modelMetalness:  0.0,
 modelReflection: 0.5,
 modelFit:        2.0,   // auto-fit target size in world units (max of width/height)
@@ -112,21 +112,23 @@ modelScale:      1.0,   // extra multiplier on top of the auto fit
 modelOffsetX:    0.0,
 modelOffsetY:    0.0,
 modelOffsetZ:    0.03,
-lightIntensity:  3.85,
-lightX:          -6,
-lightY:          6,
-lightZ:          4,
-ambient:         2,
+lightIntensity:  0.66,
+lightX:          15,
+lightY:          15,
+lightZ:          15,
+ambient:         3.89,
 modelShadowLift: 0.0,
 shadows:          true,
-shadowStrength:   1.6,   // how dark the cast shadow is
-shadowX:          -4,
-shadowY:          5,
+shadowStrength:   1.68,   // how dark the cast shadow is
+shadowX:          15,
+shadowY:          2.5,
 shadowZ:          6,
-shadowBias:       -0.0005,
-shadowNormalBias: 0.02,
-shadowSoftness:   8,
-shadowClip:       0.35,
+shadowBias:       0.0006,
+shadowNormalBias: 0.038,
+shadowSoftness:   1.5,
+shadowClip:       0.26,
+shadowFalloffSize:    3.0,  // how much wider the falloff layer blurs vs Softness
+shadowFalloffOpacity: 0.5,  // darkness of the falloff layer (0 = single shadow)
 radius:          0.27,
 feather:         0.05,
 hoverDepth:      0.43,
@@ -180,7 +182,7 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = settings.shadows;
-renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.shadowMap.type = THREE.VSMShadowMap;
 const scene  = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
 camera.position.set(0, 0, 3.4);
@@ -384,11 +386,26 @@ const antiShadowLight = new THREE.DirectionalLight(0xffffff, -settings.shadowStr
 antiShadowLight.position.copy(shadowLight.position);
 antiShadowLight.castShadow = false;
 scene.add(antiShadowLight);
+const shadowLight2 = new THREE.DirectionalLight(0xffffff, 0);
+shadowLight2.position.copy(shadowLight.position);
+shadowLight2.castShadow = settings.shadows;
+shadowLight2.shadow.mapSize.set(1024, 1024);
+shadowLight2.shadow.camera.left = -3; shadowLight2.shadow.camera.right = 3;
+shadowLight2.shadow.camera.top = 3;  shadowLight2.shadow.camera.bottom = -3;
+shadowLight2.shadow.camera.near = 0.5; shadowLight2.shadow.camera.far = 20;
+scene.add(shadowLight2);
+const antiShadowLight2 = new THREE.DirectionalLight(0xffffff, 0);
+antiShadowLight2.position.copy(shadowLight.position);
+antiShadowLight2.castShadow = false;
+scene.add(antiShadowLight2);
 function syncShadowFade(reveal){
 const k = Math.min(Math.max(reveal, 0), 1);
 const fade = k * k * (3 - 2 * k);
 shadowLight.intensity = settings.shadowStrength * fade;
 antiShadowLight.intensity = -settings.shadowStrength * fade;
+const f2 = settings.shadowStrength * settings.shadowFalloffOpacity * fade;
+shadowLight2.intensity = f2;
+antiShadowLight2.intensity = -f2;
 }
 function applyShadowSettings(){
 const on = settings.shadows;
@@ -404,6 +421,17 @@ shadowLight.position.set(settings.shadowX, settings.shadowY, settings.shadowZ);
 antiShadowLight.position.copy(shadowLight.position);
 shadowLight.shadow.bias = settings.shadowBias;
 shadowLight.shadow.normalBias = settings.shadowNormalBias;
+shadowLight.shadow.blurSamples = Math.max(8, Math.min(32, Math.round(8 + settings.shadowSoftness * 1.5)));
+const useFalloff = on && settings.shadowFalloffOpacity > 0.001;
+shadowLight2.visible = useFalloff;
+antiShadowLight2.visible = useFalloff;
+shadowLight2.castShadow = useFalloff;
+shadowLight2.position.copy(shadowLight.position);
+antiShadowLight2.position.copy(shadowLight.position);
+shadowLight2.shadow.radius = settings.shadowSoftness * settings.shadowFalloffSize;
+shadowLight2.shadow.blurSamples = Math.max(12, Math.min(32, Math.round(8 + settings.shadowSoftness * settings.shadowFalloffSize * 1.5)));
+shadowLight2.shadow.bias = settings.shadowBias;
+shadowLight2.shadow.normalBias = settings.shadowNormalBias;
 modelGroup.traverse(o => {
 if (o.isMesh){ o.castShadow = on; o.receiveShadow = false; }
 });
@@ -993,7 +1021,9 @@ fLight.add(settings, 'modelShadowLift', 0, 6, 0.01).name('Shadow lift (model)').
 const fShadow = gui.addFolder('Model cast shadow');
 fShadow.add(settings, 'shadows').name('Enabled').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowStrength', 0, 5, 0.01).name('Shadow opacity').onChange(W(applyShadowSettings));
-fShadow.add(settings, 'shadowSoftness', 0, 25, 0.5).name('Softness').onChange(W(applyShadowSettings));
+fShadow.add(settings, 'shadowSoftness', 0, 25, 0.1).name('Softness').onChange(W(applyShadowSettings));
+fShadow.add(settings, 'shadowFalloffSize', 1, 10, 0.1).name('Falloff size').onChange(W(applyShadowSettings));
+fShadow.add(settings, 'shadowFalloffOpacity', 0, 1.5, 0.01).name('Falloff opacity').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowClip', 0.05, 0.9, 0.01).name('Reveal cutoff').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowX', -15, 15, 0.1).name('X').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowY', -15, 15, 0.1).name('Y').onChange(W(applyShadowSettings));
