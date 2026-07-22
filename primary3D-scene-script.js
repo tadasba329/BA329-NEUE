@@ -121,6 +121,8 @@ shadowY:          5,
 shadowZ:          6,
 shadowBias:       -0.0005,
 shadowNormalBias: 0.02,
+shadowSoftness:   8,     // blur radius of the shadow edge (0 = hard)
+shadowClip:       0.35,  // reveal level below which geometry stops casting
 radius:          0.27,
 feather:         0.05,
 hoverDepth:      0.43,
@@ -174,7 +176,7 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = settings.shadows;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap; // supports shadow.radius blur
 const scene  = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
 camera.position.set(0, 0, 3.4);
@@ -202,6 +204,7 @@ uHoverFalloff:  { value: settings.hoverFalloff },
 uGlobalReveal:  { value: 0 },
 uModelScl:      { value: 1.0 },
 uModelOff:      { value: new THREE.Vector3(0, 0, settings.modelOffsetZ) },
+uShadowClip:    { value: settings.shadowClip },
 uDrops:    { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(9999, 9999, 0, 0)) },
 uDropsAux: { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(0, 0, 0.09, 0)) },
 uDropsStretch: { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(1, 0, 1, 0)) },
@@ -303,12 +306,20 @@ shader.vertexShader = shader.vertexShader.replace(
 transformed.z *= reveal;`
 );
 } else {
-shader.vertexShader = shader.vertexShader.replace(
+shader.uniforms.uShadowClip = u.uShadowClip;
+shader.vertexShader = shader.vertexShader
+.replace('#include <common>', '#include <common>\nvarying float vReveal;')
+.replace(
 '#include <begin_vertex>',
 `#include <begin_vertex>
 ${revealVertexChunk}
+vReveal = reveal;
 transformed.z *= reveal;`
 );
+shader.fragmentShader = shader.fragmentShader
+.replace('#include <common>', '#include <common>\nvarying float vReveal;\nuniform float uShadowClip;')
+.replace('#include <clipping_planes_fragment>',
+'#include <clipping_planes_fragment>\nif (vReveal < uShadowClip) discard;');
 }
 }
 const bgGeo = track(new THREE.PlaneGeometry(30, 30));
@@ -348,11 +359,18 @@ shadowLight.shadow.camera.top = 3;  shadowLight.shadow.camera.bottom = -3;
 shadowLight.shadow.camera.near = 0.5; shadowLight.shadow.camera.far = 20;
 shadowLight.shadow.bias = settings.shadowBias;
 shadowLight.shadow.normalBias = settings.shadowNormalBias;
+shadowLight.shadow.radius = settings.shadowSoftness;
 scene.add(shadowLight);
 const antiShadowLight = new THREE.DirectionalLight(0xffffff, -settings.shadowStrength);
 antiShadowLight.position.copy(shadowLight.position);
 antiShadowLight.castShadow = false;
 scene.add(antiShadowLight);
+function syncShadowFade(reveal){
+const k = Math.min(Math.max(reveal, 0), 1);
+const fade = k * k * (3 - 2 * k); // smooth fade with the reveal
+shadowLight.intensity = settings.shadowStrength * fade;
+antiShadowLight.intensity = -settings.shadowStrength * fade;
+}
 function applyShadowSettings(){
 const on = settings.shadows;
 renderer.shadowMap.enabled = on;
@@ -360,8 +378,9 @@ shadowLight.visible = on;
 antiShadowLight.visible = on;
 shadowLight.castShadow = on;
 bg.receiveShadow = on;
-shadowLight.intensity = settings.shadowStrength;
-antiShadowLight.intensity = -settings.shadowStrength;
+syncShadowFade(u.uGlobalReveal.value);
+shadowLight.shadow.radius = settings.shadowSoftness;
+u.uShadowClip.value = settings.shadowClip;
 shadowLight.position.set(settings.shadowX, settings.shadowY, settings.shadowZ);
 antiShadowLight.position.copy(shadowLight.position);
 shadowLight.shadow.bias = settings.shadowBias;
@@ -952,6 +971,8 @@ fLight.add(settings, 'ambient', 0, 5, 0.01).name('Ambient').onChange(W(applyMode
 const fShadow = gui.addFolder('Shadow (background only)');
 fShadow.add(settings, 'shadows').name('Enabled').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowStrength', 0, 5, 0.01).name('Darkness').onChange(W(applyShadowSettings));
+fShadow.add(settings, 'shadowSoftness', 0, 25, 0.5).name('Softness').onChange(W(applyShadowSettings));
+fShadow.add(settings, 'shadowClip', 0.05, 0.9, 0.01).name('Reveal cutoff').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowX', -15, 15, 0.1).name('X').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowY', -15, 15, 0.1).name('Y').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowZ', 0.5, 15, 0.1).name('Z').onChange(W(applyShadowSettings));
@@ -1056,6 +1077,7 @@ if (!catchupDone && Math.abs(revealGoal - u.uGlobalReveal.value) < 0.01) catchup
 const sm = Math.max(catchupDone ? settings.revealSmoothing : settings.revealCatchupSmoothing, 0.0001);
 u.uGlobalReveal.value += (revealGoal - u.uGlobalReveal.value) * (1 - Math.exp(-dt / sm));
 updateDrops(u.uTime.value);
+if (settings.shadows) syncShadowFade(u.uGlobalReveal.value);
 const lensActive =
 settings.lensEnabled &&
 u.uGlobalReveal.value > 0.001 &&
