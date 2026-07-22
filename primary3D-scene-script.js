@@ -114,6 +114,7 @@ lightX:          -6,
 lightY:          6,
 lightZ:          4,
 ambient:         2,
+modelShadowLift: 0.0,   // fills the model's own dark sides (0 = full shading)
 shadows:          true,
 shadowStrength:   1.6,   // how dark the cast shadow is
 shadowX:          -4,
@@ -205,6 +206,7 @@ uGlobalReveal:  { value: 0 },
 uModelScl:      { value: 1.0 },
 uModelOff:      { value: new THREE.Vector3(0, 0, settings.modelOffsetZ) },
 uShadowClip:    { value: settings.shadowClip },
+uModelLift:     { value: settings.modelShadowLift },
 uDrops:    { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(9999, 9999, 0, 0)) },
 uDropsAux: { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(0, 0, 0.09, 0)) },
 uDropsStretch: { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(1, 0, 1, 0)) },
@@ -341,6 +343,14 @@ const baseCompile = modelMat.onBeforeCompile;
 modelMat.onBeforeCompile = (shader) => {
 baseCompile(shader);
 injectReveal(shader, true);
+shader.uniforms.uModelLift = u.uModelLift;
+shader.fragmentShader = shader.fragmentShader
+.replace('#include <common>', '#include <common>\nuniform float uModelLift;')
+.replace(
+'vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;',
+`vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;
+totalDiffuse = max(totalDiffuse, diffuseColor.rgb * uModelLift);`
+);
 };
 const depthMat = track(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }));
 depthMat.onBeforeCompile = (shader) => injectReveal(shader, false);
@@ -968,9 +978,10 @@ fLight.add(settings, 'lightX', -15, 15, 0.1).name('X').onChange(W(applyModelLigh
 fLight.add(settings, 'lightY', -15, 15, 0.1).name('Y').onChange(W(applyModelLight));
 fLight.add(settings, 'lightZ', 0.5, 15, 0.1).name('Z').onChange(W(applyModelLight));
 fLight.add(settings, 'ambient', 0, 5, 0.01).name('Ambient').onChange(W(applyModelLight));
-const fShadow = gui.addFolder('Shadow (background only)');
+fLight.add(settings, 'modelShadowLift', 0, 6, 0.01).name('Shadow lift (model)').onChange(W(v => u.uModelLift.value = v));
+const fShadow = gui.addFolder('Model cast shadow');
 fShadow.add(settings, 'shadows').name('Enabled').onChange(W(applyShadowSettings));
-fShadow.add(settings, 'shadowStrength', 0, 5, 0.01).name('Darkness').onChange(W(applyShadowSettings));
+fShadow.add(settings, 'shadowStrength', 0, 5, 0.01).name('Shadow opacity').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowSoftness', 0, 25, 0.5).name('Softness').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowClip', 0.05, 0.9, 0.01).name('Reveal cutoff').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowX', -15, 15, 0.1).name('X').onChange(W(applyShadowSettings));
