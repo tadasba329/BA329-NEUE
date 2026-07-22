@@ -77,6 +77,7 @@ const { DRACOLoader } = await import('three/addons/loaders/DRACOLoader.js');
 const { GLTFLoader }  = await import('three/addons/loaders/GLTFLoader.js');
 const BufferGeometryUtils = await import('three/addons/utils/BufferGeometryUtils.js');
 const { EdgeSplitModifier } = await import('three/addons/modifiers/EdgeSplitModifier.js');
+const { RoomEnvironment }   = await import('three/addons/environments/RoomEnvironment.js');
 if (ctl.cancelled) return;
 const ac = new AbortController();
 const on = (target, type, fn, opts) =>
@@ -99,11 +100,13 @@ if (srgb) t.colorSpace = THREE.SRGBColorSpace;
 return track(t);
 }
 const settings = {
-textureSize:     0.75,
-textureStrength: 0.32,
-normalStrength:  1.08,
-roughness:       0.78,
-baseColor:       '#ffffff',
+bgColor:         '#f3f2f1',
+bgRoughness:     0.95,
+bgReflect:       0.0,    // background reflectivity (env map)
+modelColor:      '#ffffff',
+modelRoughness:  0.45,   // 0 = mirror-shiny, 1 = fully matte
+modelMetalness:  0.0,
+modelReflect:    0.5,    // model reflectivity (env map) — drives the "shine"
 modelFit:        2.0,   // auto-fit target size in world units (max of width/height)
 modelScale:      1.0,   // extra multiplier on top of the auto fit
 modelOffsetX:    0.0,
@@ -181,21 +184,20 @@ renderer.shadowMap.type = THREE.PCFShadowMap; // supports shadow.radius blur
 const scene  = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
 camera.position.set(0, 0, 3.4);
-const mapColor  = tex('PolishedConcrete01_1K_BaseColor.avif', true);
-const mapNormal = tex('PolishedConcrete01_1K_Normal.avif');
-const mapRough  = tex('PolishedConcrete01_1K_Roughness.avif');
 const maskNoise = tex('https://cdn.jsdelivr.net/gh/tadasba329/BA329-NEUE@dcf0c645a3ccf922a40c2d617efdd91a28e4fde5/noise-mask-v2.jpg');
-function applyRepeat(){
-const r = 1 / settings.textureSize;
-[mapColor, mapNormal, mapRough].forEach(t => t.repeat.set(r, r));
+// Neutral studio environment so low roughness / metalness actually
+// reads as shine (without it, "shiny" has nothing to reflect).
+{
+const pmrem = new THREE.PMREMGenerator(renderer);
+const envRT = track(pmrem.fromScene(new RoomEnvironment(), 0.04));
+pmrem.dispose();
+scene.environment = envRT.texture;
 }
-applyRepeat();
 const u = {
 uMouseWorld:    { value: new THREE.Vector3(9999, 9999, 0) },
 uRadius:        { value: settings.radius },
 uFeather:       { value: settings.feather },
 uMask:          { value: maskNoise },
-uTexStrength:   { value: settings.textureStrength },
 uTime:          { value: 0 },
 uInkStrength:   { value: settings.inkStrength },
 uInkSpeed:      { value: settings.inkSpeed },
@@ -211,29 +213,26 @@ uDrops:    { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(99
 uDropsAux: { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(0, 0, 0.09, 0)) },
 uDropsStretch: { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(1, 0, 1, 0)) },
 };
-function makeConcrete(){
-const m = new THREE.MeshStandardMaterial({
-color: new THREE.Color(settings.baseColor),
-map: mapColor,
-normalMap: mapNormal,
-roughnessMap: mapRough,
-roughness: settings.roughness,
+const bgMat = track(new THREE.MeshStandardMaterial({
+color: new THREE.Color(settings.bgColor),
+roughness: settings.bgRoughness,
 metalness: 0.0,
-normalScale: new THREE.Vector2(settings.normalStrength, settings.normalStrength),
-});
-m.onBeforeCompile = (shader) => {
-shader.uniforms.uTexStrength = u.uTexStrength;
-shader.fragmentShader = shader.fragmentShader
-.replace('#include <common>', '#include <common>\nuniform float uTexStrength;')
-.replace('#include <map_fragment>', `
-#ifdef USE_MAP
-vec4 sampledDiffuseColor = texture2D( map, vMapUv );
-sampledDiffuseColor.rgb = mix( vec3(1.0), sampledDiffuseColor.rgb, uTexStrength );
-diffuseColor *= sampledDiffuseColor;
-#endif
-`);
-};
-return track(m);
+envMapIntensity: settings.bgReflect,
+}));
+const modelMat = track(new THREE.MeshStandardMaterial({
+color: new THREE.Color(settings.modelColor),
+roughness: settings.modelRoughness,
+metalness: settings.modelMetalness,
+envMapIntensity: settings.modelReflect,
+}));
+function applyMaterials(){
+bgMat.color.set(settings.bgColor);
+bgMat.roughness = settings.bgRoughness;
+bgMat.envMapIntensity = settings.bgReflect;
+modelMat.color.set(settings.modelColor);
+modelMat.roughness = settings.modelRoughness;
+modelMat.metalness = settings.modelMetalness;
+modelMat.envMapIntensity = settings.modelReflect;
 }
 const revealVertexChunk = `
 vec2 wpos2 = position.xy * uModelScl + uModelOff.xy;
@@ -325,23 +324,11 @@ shader.fragmentShader = shader.fragmentShader
 }
 }
 const bgGeo = track(new THREE.PlaneGeometry(30, 30));
-{
-const pos = bgGeo.attributes.position;
-const uv = new Float32Array(pos.count * 2);
-for (let i = 0; i < pos.count; i++){
-uv[i*2] = pos.getX(i); uv[i*2+1] = pos.getY(i);
-}
-bgGeo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-}
-const bgMat = makeConcrete();
 const bg = new THREE.Mesh(bgGeo, bgMat);
 bg.position.z = -0.001;
 bg.receiveShadow = settings.shadows;
 scene.add(bg);
-const modelMat = makeConcrete();
-const baseCompile = modelMat.onBeforeCompile;
 modelMat.onBeforeCompile = (shader) => {
-baseCompile(shader);
 injectReveal(shader, true);
 shader.uniforms.uModelLift = u.uModelLift;
 shader.fragmentShader = shader.fragmentShader
@@ -959,19 +946,15 @@ fModel.add(settings, 'modelScale', 0.1, 4, 0.01).name('Scale').onChange(W(applyM
 fModel.add(settings, 'modelOffsetX', -2, 2, 0.01).name('Offset X').onChange(W(applyModelTransform));
 fModel.add(settings, 'modelOffsetY', -2, 2, 0.01).name('Offset Y').onChange(W(applyModelTransform));
 fModel.add(settings, 'modelOffsetZ', 0, 0.3, 0.001).name('Offset Z (depth)').onChange(W(applyModelTransform));
-const fSurf = gui.addFolder('Surface');
-fSurf.add(settings, 'textureSize', 0.1, 4, 0.01).name('Texture size').onChange(W(applyRepeat));
-fSurf.add(settings, 'textureStrength', 0, 1, 0.01).name('Texture strength').onChange(W(v => u.uTexStrength.value = v));
-fSurf.add(settings, 'normalStrength', 0, 3, 0.01).name('Normal strength').onChange(W(v => {
-bgMat.normalScale.set(v, v); modelMat.normalScale.set(v, v);
-}));
-fSurf.add(settings, 'roughness', 0, 1, 0.01).name('Roughness').onChange(W(v => {
-bgMat.roughness = v; modelMat.roughness = v;
-}));
-fSurf.addColor(settings, 'baseColor').name('Base color').onChange(W(v => {
-bgMat.color.set(v); modelMat.color.set(v);
-}));
-fSurf.close();
+const fBg = gui.addFolder('Background');
+fBg.addColor(settings, 'bgColor').name('Color').onChange(W(applyMaterials));
+fBg.add(settings, 'bgRoughness', 0, 1, 0.01).name('Roughness').onChange(W(applyMaterials));
+fBg.add(settings, 'bgReflect', 0, 2, 0.01).name('Reflectivity').onChange(W(applyMaterials));
+const fMat = gui.addFolder('Model material');
+fMat.addColor(settings, 'modelColor').name('Color').onChange(W(applyMaterials));
+fMat.add(settings, 'modelRoughness', 0, 1, 0.01).name('Matte \u2194 shiny (rough)').onChange(W(applyMaterials));
+fMat.add(settings, 'modelMetalness', 0, 1, 0.01).name('Metalness').onChange(W(applyMaterials));
+fMat.add(settings, 'modelReflect', 0, 3, 0.01).name('Reflectivity').onChange(W(applyMaterials));
 const fLight = gui.addFolder('Model light');
 fLight.add(settings, 'lightIntensity', 0, 10, 0.01).name('Intensity').onChange(W(applyModelLight));
 fLight.add(settings, 'lightX', -15, 15, 0.1).name('X').onChange(W(applyModelLight));
