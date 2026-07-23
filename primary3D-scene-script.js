@@ -5,7 +5,7 @@ triggerSelector: '.statue-trigger-section',
 initDelayMs: 0,
 lazyRootMargin: '20% 0px',
 autoDestroyCheckMs: 1000,
-showControlPanel: true,
+showControlPanel: false,
 };
 if (window.BA329Scene) {
 try { window.BA329Scene.destroy(); } catch (e) { console.warn(e); }
