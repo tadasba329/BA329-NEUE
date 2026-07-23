@@ -127,15 +127,7 @@ shadowNormalBias: 0.006,
 shadowSoftness:   9.3,
 shadowClip:       0.46,
 shadowFalloffSize:    10,  // how much wider the falloff layer blurs vs Softness
-shadowFalloffOpacity: 1.5,
-shadow2Enabled:        true,
-shadow2Strength:       1.0,
-shadow2Softness:       9.3,
-shadow2X:              -3.2,
-shadow2Y:              1.4,
-shadow2Z:              3.6,
-shadow2FalloffSize:    10,
-shadow2FalloffOpacity: 1.5,  // darkness of the falloff layer (0 = single shadow)
+shadowFalloffOpacity: 1.5,  // darkness of the falloff layer (0 = single shadow)
 radius:          0.27,
 feather:         0.05,
 hoverDepth:      0.43,
@@ -398,20 +390,6 @@ const antiShadowLight2 = new THREE.DirectionalLight(0xffffff, 0);
 antiShadowLight2.position.copy(shadowLight.position);
 antiShadowLight2.castShadow = false;
 scene.add(antiShadowLight2);
-function makeShadowPair(mapSize){
-const L = new THREE.DirectionalLight(0xffffff, 0);
-L.castShadow = true;
-L.shadow.mapSize.set(mapSize, mapSize);
-L.shadow.camera.left = -3; L.shadow.camera.right = 3;
-L.shadow.camera.top = 3;  L.shadow.camera.bottom = -3;
-L.shadow.camera.near = 0.5; L.shadow.camera.far = 20;
-const A = new THREE.DirectionalLight(0xffffff, 0);
-A.castShadow = false;
-scene.add(L); scene.add(A);
-return { L, A };
-}
-const shadowB     = makeShadowPair(2048);
-const shadowBFall = makeShadowPair(1024);
 function syncShadowFade(reveal){
 const k = Math.min(Math.max(reveal, 0), 1);
 const fade = k * k * (3 - 2 * k);
@@ -420,12 +398,6 @@ antiShadowLight.intensity = -settings.shadowStrength * fade;
 const f2 = settings.shadowStrength * settings.shadowFalloffOpacity * fade;
 shadowLight2.intensity = f2;
 antiShadowLight2.intensity = -f2;
-const b = settings.shadow2Enabled ? settings.shadow2Strength * fade : 0;
-shadowB.L.intensity = b;
-shadowB.A.intensity = -b;
-const bf = settings.shadow2Enabled ? settings.shadow2Strength * settings.shadow2FalloffOpacity * fade : 0;
-shadowBFall.L.intensity = bf;
-shadowBFall.A.intensity = -bf;
 }
 function applyShadowSettings(){
 const on = settings.shadows;
@@ -452,21 +424,6 @@ shadowLight2.shadow.radius = settings.shadowSoftness * settings.shadowFalloffSiz
 shadowLight2.shadow.blurSamples = Math.max(12, Math.min(32, Math.round(8 + settings.shadowSoftness * settings.shadowFalloffSize * 1.5)));
 shadowLight2.shadow.bias = settings.shadowBias;
 shadowLight2.shadow.normalBias = settings.shadowNormalBias;
-const on2 = on && settings.shadow2Enabled;
-[shadowB, shadowBFall].forEach((pair, i) => {
-const isFall = i === 1;
-const active = on2 && (!isFall || settings.shadow2FalloffOpacity > 0.001);
-pair.L.visible = active;
-pair.A.visible = active;
-pair.L.castShadow = active;
-pair.L.position.set(settings.shadow2X, settings.shadow2Y, settings.shadow2Z);
-pair.A.position.copy(pair.L.position);
-const r = settings.shadow2Softness * (isFall ? settings.shadow2FalloffSize : 1);
-pair.L.shadow.radius = r;
-pair.L.shadow.blurSamples = Math.max(isFall ? 12 : 8, Math.min(32, Math.round(8 + r * 1.5)));
-pair.L.shadow.bias = settings.shadowBias;
-pair.L.shadow.normalBias = settings.shadowNormalBias;
-});
 modelGroup.traverse(o => {
 if (o.isMesh){ o.castShadow = on; o.receiveShadow = false; }
 });
@@ -1064,15 +1021,6 @@ fShadow.add(settings, 'shadowY', -15, 15, 0.1).name('Y').onChange(W(applyShadowS
 fShadow.add(settings, 'shadowZ', 0.5, 15, 0.1).name('Z').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowBias', -0.005, 0.005, 0.0001).name('Bias').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowNormalBias', 0, 0.2, 0.001).name('Normal bias').onChange(W(applyShadowSettings));
-const fShadow2 = gui.addFolder('Cast shadow 2');
-fShadow2.add(settings, 'shadow2Enabled').name('Enabled').onChange(W(applyShadowSettings));
-fShadow2.add(settings, 'shadow2Strength', 0, 5, 0.01).name('Shadow opacity').onChange(W(applyShadowSettings));
-fShadow2.add(settings, 'shadow2Softness', 0, 25, 0.1).name('Softness').onChange(W(applyShadowSettings));
-fShadow2.add(settings, 'shadow2FalloffSize', 1, 10, 0.1).name('Falloff size').onChange(W(applyShadowSettings));
-fShadow2.add(settings, 'shadow2FalloffOpacity', 0, 1.5, 0.01).name('Falloff opacity').onChange(W(applyShadowSettings));
-fShadow2.add(settings, 'shadow2X', -15, 15, 0.1).name('X').onChange(W(applyShadowSettings));
-fShadow2.add(settings, 'shadow2Y', -15, 15, 0.1).name('Y').onChange(W(applyShadowSettings));
-fShadow2.add(settings, 'shadow2Z', 0.5, 15, 0.1).name('Z').onChange(W(applyShadowSettings));
 const fHover = gui.addFolder('Hover');
 fHover.add(settings, 'radius', 0.02, 1.5, 0.01).name('Radius').onChange(W(v => u.uRadius.value = v));
 fHover.add(settings, 'feather', 0.001, 0.5, 0.001).name('Feather').onChange(W(v => u.uFeather.value = v));
