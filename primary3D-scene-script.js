@@ -214,7 +214,7 @@ uModelOff:      { value: new THREE.Vector3(0, 0, settings.modelOffsetZ) },
 uShadowClip:    { value: settings.shadowClip },
 uModelLift:     { value: settings.modelShadowLift },
 uModelDeep:     { value: settings.modelShadowDeep },
-uShadeNorm:     { value: settings.lightIntensity + settings.ambient },
+uShadeNorm:     { value: (settings.lightIntensity + settings.ambient) / Math.PI },
 uModelRough:    { value: settings.modelRoughness },
 uDrops:    { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(9999, 9999, 0, 0)) },
 uDropsAux: { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(0, 0, 0.09, 0)) },
@@ -365,8 +365,9 @@ shader.fragmentShader = shader.fragmentShader
 `vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;
 float mLum = dot(totalDiffuse, vec3(0.2126, 0.7152, 0.0722));
 float mRef = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722)) * max(uShadeNorm, 0.001);
-float mLit = smoothstep(0.0, 1.0, clamp(mLum / max(mRef, 0.001), 0.0, 1.0));
-totalDiffuse *= mix(max(1.0 - uModelDeep, 0.0), 1.0, mLit);
+float mT = clamp(mLum / max(mRef, 0.001), 0.0, 1.0);
+float mMask = 1.0 - smoothstep(0.05, 0.65, mT);
+totalDiffuse *= 1.0 - clamp(uModelDeep, 0.0, 1.0) * mMask;
 totalDiffuse = max(totalDiffuse, diffuseColor.rgb * uModelLift);`
 );
 };
@@ -448,7 +449,7 @@ bgMat.needsUpdate = true;
 modelMat.needsUpdate = true;
 }
 function applyModelLight(){
-u.uShadeNorm.value = settings.lightIntensity + settings.ambient;
+u.uShadeNorm.value = (settings.lightIntensity + settings.ambient) / Math.PI;
 sun.intensity = settings.lightIntensity;
 sun.position.set(settings.lightX, settings.lightY, settings.lightZ);
 ambient.intensity = settings.ambient;
