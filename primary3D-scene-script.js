@@ -104,7 +104,7 @@ textureStrength: 0.31,
 normalStrength:  0.75,
 roughness:       0.86,
 baseColor:       '#f2f0ed',
-modelRoughness:  1.0,
+modelRoughness:  0.48,
 modelMetalness:  0.0,
 modelReflection: 0.5,
 modelFit:        2.0,   // auto-fit target size in world units (max of width/height)
@@ -112,23 +112,21 @@ modelScale:      1.0,   // extra multiplier on top of the auto fit
 modelOffsetX:    0.0,
 modelOffsetY:    0.0,
 modelOffsetZ:    0.03,
-lightIntensity:  0.66,
+lightIntensity:  0.9,
 lightX:          15,
 lightY:          15,
 lightZ:          15,
-ambient:         3.89,
-modelShadowLift: 0.0,
-modelShadowDeep: 0.0,   // multiplies the model's dark sides darker (0 = off)
+ambient:         3.77,
 shadows:          true,
-shadowStrength:   1.87,   // how dark the cast shadow is
-shadowX:          6.9,
-shadowY:          2.5,
+shadowStrength:   1.5,   // how dark the cast shadow is
+shadowX:          3.2,
+shadowY:          1.4,
 shadowZ:          3.6,
-shadowBias:       0.0014,
-shadowNormalBias: 0.03,
-shadowSoftness:   5.3,
+shadowBias:       -0.0005,
+shadowNormalBias: 0.006,
+shadowSoftness:   9.3,
 shadowClip:       0.46,
-shadowFalloffSize:    1.7,  // how much wider the falloff layer blurs vs Softness
+shadowFalloffSize:    10,  // how much wider the falloff layer blurs vs Softness
 shadowFalloffOpacity: 1.5,  // darkness of the falloff layer (0 = single shadow)
 radius:          0.27,
 feather:         0.05,
@@ -212,11 +210,6 @@ uGlobalReveal:  { value: 0 },
 uModelScl:      { value: 1.0 },
 uModelOff:      { value: new THREE.Vector3(0, 0, settings.modelOffsetZ) },
 uShadowClip:    { value: settings.shadowClip },
-uModelLift:     { value: settings.modelShadowLift },
-uModelDeep:     { value: settings.modelShadowDeep },
-uShadeNorm:     { value: (settings.lightIntensity + settings.ambient) / Math.PI },
-uSunDir:        { value: new THREE.Vector3(settings.lightX, settings.lightY, settings.lightZ).normalize() },
-uShadeMin:      { value: Math.min(settings.ambient / Math.max(settings.ambient + settings.lightIntensity, 1e-3), 0.98) },
 uModelRough:    { value: settings.modelRoughness },
 uDrops:    { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(9999, 9999, 0, 0)) },
 uDropsAux: { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(0, 0, 0.09, 0)) },
@@ -354,26 +347,11 @@ const baseCompile = modelMat.onBeforeCompile;
 modelMat.onBeforeCompile = (shader) => {
 baseCompile(shader);
 injectReveal(shader, true);
-shader.uniforms.uModelLift = u.uModelLift;
-shader.uniforms.uModelDeep = u.uModelDeep;
-shader.uniforms.uShadeNorm = u.uShadeNorm;
-shader.uniforms.uShadeMin = u.uShadeMin;
-shader.uniforms.uSunDir = u.uSunDir;
 shader.uniforms.uModelRough = u.uModelRough;
 shader.fragmentShader = shader.fragmentShader
-.replace('#include <common>', '#include <common>\nuniform float uModelLift, uModelDeep, uShadeNorm, uShadeMin;\nuniform vec3 uSunDir;\nuniform float uModelRough;')
+.replace('#include <common>', '#include <common>\nuniform float uModelRough;')
 .replace('#include <roughnessmap_fragment>',
-'#include <roughnessmap_fragment>\nroughnessFactor = clamp(uModelRough, 0.045, 1.0);')
-.replace(
-'vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;',
-`vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;
-vec3 mL = normalize(uSunDir);
-float mDNL = clamp(dot(normalize(geometryNormal), mL), 0.0, 1.0);
-float mPivot = clamp(mL.z, 0.05, 1.0);
-float mRel = clamp(mDNL / mPivot, 0.0, 1.0);
-totalDiffuse *= pow(max(mRel, 0.002), uModelDeep);
-totalDiffuse = max(totalDiffuse, diffuseColor.rgb * uModelLift);`
-);
+'#include <roughnessmap_fragment>\nroughnessFactor = clamp(uModelRough, 0.045, 1.0);');
 };
 modelMat.roughness = settings.modelRoughness;
 modelMat.metalness = 0.0;
@@ -453,9 +431,6 @@ bgMat.needsUpdate = true;
 modelMat.needsUpdate = true;
 }
 function applyModelLight(){
-u.uShadeNorm.value = (settings.lightIntensity + settings.ambient) / Math.PI;
-u.uShadeMin.value = Math.min(settings.ambient / Math.max(settings.ambient + settings.lightIntensity, 1e-3), 0.98);
-u.uSunDir.value.set(settings.lightX, settings.lightY, settings.lightZ).normalize();
 sun.intensity = settings.lightIntensity;
 sun.position.set(settings.lightX, settings.lightY, settings.lightZ);
 ambient.intensity = settings.ambient;
@@ -1034,8 +1009,6 @@ fLight.add(settings, 'lightX', -15, 15, 0.1).name('X').onChange(W(applyModelLigh
 fLight.add(settings, 'lightY', -15, 15, 0.1).name('Y').onChange(W(applyModelLight));
 fLight.add(settings, 'lightZ', 0.5, 15, 0.1).name('Z').onChange(W(applyModelLight));
 fLight.add(settings, 'ambient', 0, 5, 0.01).name('Ambient').onChange(W(applyModelLight));
-fLight.add(settings, 'modelShadowLift', 0, 6, 0.01).name('Shadow lift (model)').onChange(W(v => u.uModelLift.value = v));
-fLight.add(settings, 'modelShadowDeep', 0, 4, 0.01).name('Shadow deepen (model)').onChange(W(v => u.uModelDeep.value = v));
 const fShadow = gui.addFolder('Model cast shadow');
 fShadow.add(settings, 'shadows').name('Enabled').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowStrength', 0, 5, 0.01).name('Shadow opacity').onChange(W(applyShadowSettings));
