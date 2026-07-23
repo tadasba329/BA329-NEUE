@@ -215,6 +215,7 @@ uShadowClip:    { value: settings.shadowClip },
 uModelLift:     { value: settings.modelShadowLift },
 uModelDeep:     { value: settings.modelShadowDeep },
 uShadeNorm:     { value: (settings.lightIntensity + settings.ambient) / Math.PI },
+uSunDir:        { value: new THREE.Vector3(settings.lightX, settings.lightY, settings.lightZ).normalize() },
 uShadeMin:      { value: Math.min(settings.ambient / Math.max(settings.ambient + settings.lightIntensity, 1e-3), 0.98) },
 uModelRough:    { value: settings.modelRoughness },
 uDrops:    { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(9999, 9999, 0, 0)) },
@@ -357,19 +358,20 @@ shader.uniforms.uModelLift = u.uModelLift;
 shader.uniforms.uModelDeep = u.uModelDeep;
 shader.uniforms.uShadeNorm = u.uShadeNorm;
 shader.uniforms.uShadeMin = u.uShadeMin;
+shader.uniforms.uSunDir = u.uSunDir;
 shader.uniforms.uModelRough = u.uModelRough;
 shader.fragmentShader = shader.fragmentShader
-.replace('#include <common>', '#include <common>\nuniform float uModelLift, uModelDeep, uShadeNorm, uShadeMin;\nuniform float uModelRough;')
+.replace('#include <common>', '#include <common>\nuniform float uModelLift, uModelDeep, uShadeNorm, uShadeMin;\nuniform vec3 uSunDir;\nuniform float uModelRough;')
 .replace('#include <roughnessmap_fragment>',
 '#include <roughnessmap_fragment>\nroughnessFactor = clamp(uModelRough, 0.045, 1.0);')
 .replace(
 'vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;',
 `vec3 totalDiffuse = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;
-float mLum = dot(totalDiffuse, vec3(0.2126, 0.7152, 0.0722));
-float mRef = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722)) * max(uShadeNorm, 0.001);
-float mT = clamp(mLum / max(mRef, 0.001), 0.0, 1.0);
-float mRel = clamp((mT - uShadeMin) / max(1.0 - uShadeMin, 0.02), 0.0, 1.0);
-totalDiffuse *= pow(max(mRel, 0.001), uModelDeep);
+vec3 mL = normalize(uSunDir);
+float mDNL = clamp(dot(normalize(geometryNormal), mL), 0.0, 1.0);
+float mPivot = clamp(mL.z, 0.05, 1.0);
+float mRel = clamp(mDNL / mPivot, 0.0, 1.0);
+totalDiffuse *= pow(max(mRel, 0.002), uModelDeep);
 totalDiffuse = max(totalDiffuse, diffuseColor.rgb * uModelLift);`
 );
 };
@@ -453,6 +455,7 @@ modelMat.needsUpdate = true;
 function applyModelLight(){
 u.uShadeNorm.value = (settings.lightIntensity + settings.ambient) / Math.PI;
 u.uShadeMin.value = Math.min(settings.ambient / Math.max(settings.ambient + settings.lightIntensity, 1e-3), 0.98);
+u.uSunDir.value.set(settings.lightX, settings.lightY, settings.lightZ).normalize();
 sun.intensity = settings.lightIntensity;
 sun.position.set(settings.lightX, settings.lightY, settings.lightZ);
 ambient.intensity = settings.ambient;
