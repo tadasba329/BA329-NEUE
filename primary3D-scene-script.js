@@ -215,6 +215,7 @@ uShadowClip:    { value: settings.shadowClip },
 uModelLift:     { value: settings.modelShadowLift },
 uModelDeep:     { value: settings.modelShadowDeep },
 uShadeNorm:     { value: (settings.lightIntensity + settings.ambient) / Math.PI },
+uShadeMin:      { value: Math.min(settings.ambient / Math.max(settings.ambient + settings.lightIntensity, 1e-3), 0.98) },
 uModelRough:    { value: settings.modelRoughness },
 uDrops:    { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(9999, 9999, 0, 0)) },
 uDropsAux: { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4(0, 0, 0.09, 0)) },
@@ -355,9 +356,10 @@ injectReveal(shader, true);
 shader.uniforms.uModelLift = u.uModelLift;
 shader.uniforms.uModelDeep = u.uModelDeep;
 shader.uniforms.uShadeNorm = u.uShadeNorm;
+shader.uniforms.uShadeMin = u.uShadeMin;
 shader.uniforms.uModelRough = u.uModelRough;
 shader.fragmentShader = shader.fragmentShader
-.replace('#include <common>', '#include <common>\nuniform float uModelLift, uModelDeep, uShadeNorm;\nuniform float uModelRough;')
+.replace('#include <common>', '#include <common>\nuniform float uModelLift, uModelDeep, uShadeNorm, uShadeMin;\nuniform float uModelRough;')
 .replace('#include <roughnessmap_fragment>',
 '#include <roughnessmap_fragment>\nroughnessFactor = clamp(uModelRough, 0.045, 1.0);')
 .replace(
@@ -366,8 +368,8 @@ shader.fragmentShader = shader.fragmentShader
 float mLum = dot(totalDiffuse, vec3(0.2126, 0.7152, 0.0722));
 float mRef = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722)) * max(uShadeNorm, 0.001);
 float mT = clamp(mLum / max(mRef, 0.001), 0.0, 1.0);
-float mMask = 1.0 - smoothstep(0.05, 0.65, mT);
-totalDiffuse *= 1.0 - clamp(uModelDeep, 0.0, 1.0) * mMask;
+float mRel = clamp((mT - uShadeMin) / max(1.0 - uShadeMin, 0.02), 0.0, 1.0);
+totalDiffuse *= pow(max(mRel, 0.001), uModelDeep);
 totalDiffuse = max(totalDiffuse, diffuseColor.rgb * uModelLift);`
 );
 };
@@ -450,6 +452,7 @@ modelMat.needsUpdate = true;
 }
 function applyModelLight(){
 u.uShadeNorm.value = (settings.lightIntensity + settings.ambient) / Math.PI;
+u.uShadeMin.value = Math.min(settings.ambient / Math.max(settings.ambient + settings.lightIntensity, 1e-3), 0.98);
 sun.intensity = settings.lightIntensity;
 sun.position.set(settings.lightX, settings.lightY, settings.lightZ);
 ambient.intensity = settings.ambient;
@@ -1029,7 +1032,7 @@ fLight.add(settings, 'lightY', -15, 15, 0.1).name('Y').onChange(W(applyModelLigh
 fLight.add(settings, 'lightZ', 0.5, 15, 0.1).name('Z').onChange(W(applyModelLight));
 fLight.add(settings, 'ambient', 0, 5, 0.01).name('Ambient').onChange(W(applyModelLight));
 fLight.add(settings, 'modelShadowLift', 0, 6, 0.01).name('Shadow lift (model)').onChange(W(v => u.uModelLift.value = v));
-fLight.add(settings, 'modelShadowDeep', 0, 1, 0.01).name('Shadow deepen (model)').onChange(W(v => u.uModelDeep.value = v));
+fLight.add(settings, 'modelShadowDeep', 0, 4, 0.01).name('Shadow deepen (model)').onChange(W(v => u.uModelDeep.value = v));
 const fShadow = gui.addFolder('Model cast shadow');
 fShadow.add(settings, 'shadows').name('Enabled').onChange(W(applyShadowSettings));
 fShadow.add(settings, 'shadowStrength', 0, 5, 0.01).name('Shadow opacity').onChange(W(applyShadowSettings));
