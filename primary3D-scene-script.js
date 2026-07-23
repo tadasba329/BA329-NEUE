@@ -51,23 +51,9 @@ if (!canvas){
 showError('#gl canvas not found — scene not initialized.');
 return;
 }
-const triggerEl = document.querySelector(CONFIG.triggerSelector);
-if (!triggerEl){
-console.warn(`[BA329Scene] Trigger "${CONFIG.triggerSelector}" not found — using the canvas as the init trigger instead.`);
-}
-const initTrigger = triggerEl || canvas;
-if ('IntersectionObserver' in window){
-ctl.lazyIO = new IntersectionObserver((entries) => {
-if (entries.some(e => e.isIntersecting)){
-if (ctl.lazyIO){ ctl.lazyIO.disconnect(); ctl.lazyIO = null; }
+// Boot immediately on page load (lazy trigger-based init removed).
 if (CONFIG.initDelayMs > 0) setTimeout(startInit, CONFIG.initDelayMs);
 else startInit();
-}
-}, { rootMargin: CONFIG.lazyRootMargin });
-ctl.lazyIO.observe(initTrigger);
-} else {
-startInit();
-}
 window.addEventListener('pagehide', () => {
 ctl.instance && ctl.instance.dispose();
 }, { signal: ctl.bootAC.signal });
