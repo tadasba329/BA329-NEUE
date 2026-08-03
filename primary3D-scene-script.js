@@ -78,12 +78,14 @@ const CONFIG = {
   errorSelector:       '#gl-error',
   initDelayMs:         0,
   autoDestroyCheckMs:  2000,
-  showControlPanel:    true,
+  showControlPanel:    false,
 
   // adaptive quality
   autoQuality:         true,
   targetFrameMs:       20,      // ~50fps; step down if we stay above this
-  qualityTier:         null,    // force 'high' | 'medium' | 'low' | 'minimal'
+  qualityTier:         'low',   // starting tier. null = auto-detect from device.
+                                // change live via the GUI dropdown or
+                                // BA329Scene.setQuality('high'|'medium'|'low'|'minimal')
 
   // sizing
   sizeFromCanvas:      true,    // size from the canvas box, not the window
@@ -93,11 +95,14 @@ const CONFIG = {
 
 /* ---------------------------------------------------------------- quality -- */
 
+// `bake` is the shadow bake resolution. It is a ONE-TIME load cost, not a
+// per-frame one, so it stays high even on low tiers — the tight softness
+// setting needs the texels to keep a crisp contact edge.
 const QUALITY = {
   high:    { dpr: 2.00, msaa: 4, blurDiv: 4, blurPasses: 2, lensTaps: 8, bake: 1024, lens: true  },
-  medium:  { dpr: 1.50, msaa: 2, blurDiv: 4, blurPasses: 2, lensTaps: 6, bake: 768,  lens: true  },
-  low:     { dpr: 1.25, msaa: 0, blurDiv: 4, blurPasses: 1, lensTaps: 4, bake: 512,  lens: true  },
-  minimal: { dpr: 1.00, msaa: 0, blurDiv: 4, blurPasses: 1, lensTaps: 4, bake: 512,  lens: false },
+  medium:  { dpr: 1.50, msaa: 2, blurDiv: 4, blurPasses: 2, lensTaps: 6, bake: 1024, lens: true  },
+  low:     { dpr: 1.25, msaa: 0, blurDiv: 4, blurPasses: 1, lensTaps: 4, bake: 1024, lens: true  },
+  minimal: { dpr: 1.00, msaa: 0, blurDiv: 4, blurPasses: 1, lensTaps: 4, bake: 768,  lens: false },
 };
 const TIERS = ['high', 'medium', 'low', 'minimal'];
 
@@ -203,12 +208,12 @@ async function initScene(){
     textureStrength: 0.31,
     normalStrength:  0.75,
     roughness:       0.86,
-    baseColor:       '#f2f0ed',
+    baseColor:       '#f5f5f5',
     modelRoughness:  0.48,
 
     // model placement
     modelFit:        2.0,
-    modelScale:      1.0,
+    modelScale:      0.55,
     modelOffsetX:    0.0,
     modelOffsetY:    0.0,
     modelOffsetZ:    0.03,
@@ -229,13 +234,13 @@ async function initScene(){
 
     // baked shadow (replaces the 4-light realtime rig)
     shadows:               true,
-    shadowX:               3.2,
-    shadowY:               1.4,
-    shadowZ:               3.6,
-    shadowOpacity:         0.20,  // contact layer darkening, 0..1
-    shadowFalloffOpacity:  0.26,  // wide layer darkening, 0..1
-    shadowSoftness:        0.030, // world units — resolution independent now
-    shadowFalloffSize:     12.0,  // wide layer = softness * this
+    shadowX:               5.8,
+    shadowY:               1.0,
+    shadowZ:               15.0,
+    shadowOpacity:         0.24,  // contact layer darkening, 0..1
+    shadowFalloffOpacity:  0.0,   // wide layer darkening, 0..1 (off)
+    shadowSoftness:        0.006, // world units — resolution independent now
+    shadowFalloffSize:     1.0,   // wide layer = softness * this
 
     // hover
     radius:          0.27,
@@ -1284,6 +1289,9 @@ async function initScene(){
 
   /* --------------------------------------------------------------- quality -- */
 
+  let qualityCtrl = null;
+  const qualityProxy = { tier: TIERS[currentTier] };
+
   function applyQuality(){
     Object.assign(q, QUALITY[TIERS[currentTier]]);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, q.dpr));
@@ -1291,6 +1299,10 @@ async function initScene(){
     resize();
     lensActiveAllowed = q.lens;
     idleSettled = false;
+    if (qualityCtrl){
+      qualityProxy.tier = TIERS[currentTier];
+      qualityCtrl.updateDisplay();
+    }
   }
 
   let lensActiveAllowed = q.lens;
@@ -1761,7 +1773,7 @@ async function initScene(){
       fDrops.close();
 
       const fPerf = gui.addFolder('Performance');
-      fPerf.add({ tier: TIERS[currentTier] }, 'tier', TIERS).name('Quality')
+      qualityCtrl = fPerf.add(qualityProxy, 'tier', TIERS).name('Quality')
         .onChange(W(t => { currentTier = TIERS.indexOf(t); applyQuality(); }));
       fPerf.add(CONFIG, 'autoQuality').name('Auto downgrade');
     } catch (e) {
