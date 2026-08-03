@@ -40,8 +40,13 @@
       - The renderer now sizes from the CANVAS BOX (ResizeObserver), not
         window.innerWidth/innerHeight. That mismatch is what pushed the statue
         off-centre inside Webflow.
-      - Camera auto-fits: on narrow/portrait viewports it pulls back so the
-        statue always fits and stays centred, instead of being cropped.
+      - Framing is 'cover': fixed camera distance, so the statue keeps the same
+        apparent height on every viewport and the sides crop on narrow screens
+        rather than the statue shrinking. settings.fitMode = 'contain' swaps to
+        the pull-back-so-nothing-crops behaviour.
+      - settings.anchorToViewport centres the statue on the VISIBLE slice of the
+        canvas instead of the canvas box, which fixes it sitting low when the
+        canvas element is taller than the viewport.
       - Pointer coords are mapped through the canvas rect, not the window.
       - Optional visualViewport lock for the mobile 100vh address-bar bug.
 
@@ -213,16 +218,25 @@ async function initScene(){
 
     // model placement
     modelFit:        2.0,
-    modelScale:      0.65,
+    modelScale:      0.55,
     modelOffsetX:    0.0,
     modelOffsetY:    0.0,
     modelOffsetZ:    0.03,
 
-    // framing (NEW)
-    autoFit:         true,   // keep the statue fully visible + centred on any aspect
-    fitMargin:       1,   // >1 = more breathing room around the statue
+    // framing
+    // 'cover'   = constant apparent height on every viewport. Sides crop if the
+    //             viewport is narrower than the statue. Behaves like CSS
+    //             background-size: cover.
+    // 'contain' = pulls the camera back on narrow viewports so nothing ever
+    //             crops, at the cost of the statue shrinking.
+    fitMode:         'cover',
+    fitMargin:       1.12,   // >1 = more breathing room around the statue
     minDistance:     2.2,
-    cameraOffsetY:   0.0,    // nudge the framing up/down in world units
+    // Centres the statue on the VISIBLE part of the canvas rather than on the
+    // canvas box. This is what stops it sitting low when the canvas element is
+    // taller than the viewport (the classic 100vh / Webflow-section case).
+    anchorToViewport:true,
+    cameraOffsetY:   0.0,    // manual nudge on top, in world units
     radiusFollowsFit:true,   // keep the hover hole the same on-screen size
 
     // light
@@ -1216,26 +1230,44 @@ async function initScene(){
     return { w: Math.max(1, w), h: Math.max(1, h) };
   }
 
-  // Pull the camera back on narrow viewports so the statue is never cropped
-  // and always sits dead centre.
+  // How far the visible slice of the canvas is offset from the canvas box
+  // centre, converted to world units. Zero when the whole canvas is on screen.
+  function viewportAnchorOffset(d, tanV){
+    if (!settings.anchorToViewport) return 0;
+    const r = canvas.getBoundingClientRect();
+    if (!r.height) return 0;
+    const vh = window.innerHeight || r.height;
+    const top    = Math.max(r.top, 0);
+    const bottom = Math.min(r.bottom, vh);
+    if (bottom <= top) return 0;
+    const visibleCentre = (top + bottom) / 2;
+    const boxCentre     = (r.top + r.bottom) / 2;
+    const worldPerPx    = (2 * d * tanV) / r.height;
+    return (visibleCentre - boxCentre) * worldPerPx;
+  }
+
+  // 'cover' holds the camera at a fixed distance, so the statue keeps the same
+  // apparent height everywhere and modelScale directly controls how big it
+  // reads. 'contain' pulls back on narrow viewports so nothing crops.
   function fitCamera(){
     const s  = settings.modelScale;
     const hx = modelHalf.x * s;
-    const hy = modelHalf.y * s;
     const vFov = THREE.MathUtils.degToRad(camera.fov);
     const tanV = Math.tan(vFov / 2);
 
-    let d;
-    if (settings.autoFit){
-      const dV = (hy * settings.fitMargin) / tanV;
-      const dH = (hx * settings.fitMargin) / (tanV * Math.max(camera.aspect, 0.05));
-      d = Math.max(dV, dH, settings.minDistance) + settings.modelOffsetZ + modelDepth * 0.5;
-    } else {
-      d = baseDistance;
-    }
+    let d = baseDistance;
 
-    camera.position.set(0, settings.cameraOffsetY, d);
-    camera.lookAt(0, settings.cameraOffsetY, 0);
+    if (settings.fitMode === 'contain'){
+      const dH = (hx * settings.fitMargin) / (tanV * Math.max(camera.aspect, 0.05))
+               + settings.modelOffsetZ + modelDepth * 0.5;
+      d = Math.max(d, dH);
+    }
+    d = Math.max(d, settings.minDistance);
+
+    const camY = settings.cameraOffsetY + viewportAnchorOffset(d, tanV);
+
+    camera.position.set(0, camY, d);
+    camera.lookAt(0, camY, 0);
     camera.updateProjectionMatrix();
 
     // world-space hover sizes scale with distance so the hole keeps the same
@@ -1267,8 +1299,10 @@ async function initScene(){
     idleSettled = false;
   }
 
-  // establish the reference distance at a typical desktop aspect so the
-  // hover hole matches the original look there
+  // The design distance, locked in once at load from a desktop aspect. In
+  // 'cover' mode this IS the camera distance on every device, which is what
+  // keeps the statue the same apparent size everywhere and leaves modelScale
+  // free to actually change how big it reads.
   {
     const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
     const dV = (modelHalf.y * settings.modelScale * settings.fitMargin) / tanV;
@@ -1455,6 +1489,9 @@ async function initScene(){
       scrollQueued = false;
       canvasRect = canvas.getBoundingClientRect();
       updateScrollReveal();
+      // the visible slice of the canvas changes as it scrolls, so the
+      // vertical anchor has to follow it
+      if (settings.anchorToViewport) fitCamera();
       idleSettled = false;
     });
   }, { passive: true });
@@ -1668,8 +1705,10 @@ async function initScene(){
       const W = (fn) => (v) => { fn(v); wake(); };
 
       const fFrame = gui.addFolder('Framing');
-      fFrame.add(settings, 'autoFit').name('Auto fit').onChange(W(fitCamera));
+      fFrame.add(settings, 'fitMode', ['cover', 'contain']).name('Fit mode').onChange(W(fitCamera));
+      fFrame.add(settings, 'anchorToViewport').name('Centre on viewport').onChange(W(fitCamera));
       fFrame.add(settings, 'fitMargin', 1, 2, 0.01).name('Margin').onChange(W(fitCamera));
+      fFrame.add(settings, 'minDistance', 0.5, 8, 0.01).name('Min distance').onChange(W(fitCamera));
       fFrame.add(settings, 'cameraOffsetY', -1, 1, 0.01).name('Vertical offset').onChange(W(fitCamera));
       fFrame.add(settings, 'radiusFollowsFit').name('Scale hover w/ fit').onChange(W(fitCamera));
 
