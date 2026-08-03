@@ -213,14 +213,14 @@ async function initScene(){
 
     // model placement
     modelFit:        2.0,
-    modelScale:      0.55,
+    modelScale:      0.65,
     modelOffsetX:    0.0,
     modelOffsetY:    0.0,
     modelOffsetZ:    0.03,
 
     // framing (NEW)
     autoFit:         true,   // keep the statue fully visible + centred on any aspect
-    fitMargin:       1.12,   // >1 = more breathing room around the statue
+    fitMargin:       1,   // >1 = more breathing room around the statue
     minDistance:     2.2,
     cameraOffsetY:   0.0,    // nudge the framing up/down in world units
     radiusFollowsFit:true,   // keep the hover hole the same on-screen size
