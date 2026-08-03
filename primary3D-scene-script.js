@@ -37,18 +37,33 @@
         splits nothing, so it was pure load-time cost.
 
    4. RESPONSIVE / CENTERING
-      - The renderer now sizes from the CANVAS BOX (ResizeObserver), not
+      - The renderer sizes from the CANVAS BOX (ResizeObserver), not
         window.innerWidth/innerHeight. That mismatch is what pushed the statue
         off-centre inside Webflow.
       - Framing is 'cover': fixed camera distance, so the statue keeps the same
         apparent height on every viewport and the sides crop on narrow screens
         rather than the statue shrinking. settings.fitMode = 'contain' swaps to
         the pull-back-so-nothing-crops behaviour.
-      - settings.anchorToViewport centres the statue on the VISIBLE slice of the
-        canvas instead of the canvas box, which fixes it sitting low when the
-        canvas element is taller than the viewport.
+      - settings.cameraOffsetY is the only thing that moves the camera
+        vertically. Nothing is computed from scroll position.
       - Pointer coords are mapped through the canvas rect, not the window.
       - Optional visualViewport lock for the mobile 100vh address-bar bug.
+
+   6. FULLY STATIC ON SCROLL
+      Nothing in the scene reads scroll position any more. The scroll-driven
+      reveal is gone: the statue starts fully revealed and stays that way.
+      window.revealModel() / window.hideModel() still work if you want to drive
+      it from your own trigger. The only scroll listener left flags the cached
+      canvas rect as stale so pointer mapping stays correct in a scrolling
+      section — it touches nothing else.
+
+   7. TEXTURES REMOVED
+      The three concrete PBR maps (base colour / normal / roughness) are gone,
+      along with the uv attributes that only existed to tile them. That drops
+      3 texture fetches per pixel on a full-screen backdrop, the whole normal
+      mapping path, and 3 CDN downloads at load. Surface is now flat colour +
+      roughness. The noise mask stays — the ink edge, hover hole and liquid
+      distortion all sample it.
 
    5. ADAPTIVE QUALITY
       Tier is picked from the device at boot and steps down automatically if
@@ -208,10 +223,7 @@ async function initScene(){
   /* ------------------------------------------------------------- settings -- */
 
   const settings = {
-    // surface
-    textureSize:     0.1,
-    textureStrength: 0.31,
-    normalStrength:  0.75,
+    // surface (textures removed — flat shaded)
     roughness:       0.86,
     baseColor:       '#f5f5f5',
     modelRoughness:  0.48,
@@ -232,11 +244,8 @@ async function initScene(){
     fitMode:         'cover',
     fitMargin:       1.12,   // >1 = more breathing room around the statue
     minDistance:     2.2,
-    // Centres the statue on the VISIBLE part of the canvas rather than on the
-    // canvas box. This is what stops it sitting low when the canvas element is
-    // taller than the viewport (the classic 100vh / Webflow-section case).
-    anchorToViewport:true,
-    cameraOffsetY:   0.0,    // manual nudge on top, in world units
+    // The single lever for vertical position. Nothing else moves the camera.
+    cameraOffsetY:   0.0,    // world units, negative = statue moves up
     radiusFollowsFit:true,   // keep the hover hole the same on-screen size
 
     // light
@@ -283,12 +292,10 @@ async function initScene(){
     inkSpeed:        0.08,
     inkDistortion:   0.6,
 
-    // reveal
-    revealTargetSelector:   '#gl',
-    revealStart:            0.3,
-    revealEnd:              0.9,
+    // reveal — the scene is static, so this starts fully revealed and only
+    // ever moves if you call revealModel() / hideModel() yourself
+    startRevealed:          true,
     revealSmoothing:        0.15,
-    revealCatchupSmoothing: 0.5,
 
     // drops
     dropsEnabled:      false,
@@ -348,17 +355,12 @@ async function initScene(){
     return track(t);
   }
 
-  const mapColor  = tex('PolishedConcrete01_1K_BaseColor.avif', true);
-  const mapNormal = tex('PolishedConcrete01_1K_Normal.avif');
-  const mapRough  = tex('PolishedConcrete01_1K_Roughness.avif');
-  // sampled in the vertex shader -> no mipmaps, keeps the VS fetch cheap
+  // Only the noise mask survives — it drives the ink edge, the hover hole and
+  // the liquid distortion. The three concrete PBR maps are gone: that removes
+  // 3 texture fetches per pixel on a full-screen backdrop, the normal-mapping
+  // path in the fragment shader, and 3 CDN downloads at load.
+  // Sampled in the vertex shader too -> no mipmaps, keeps the VS fetch cheap.
   const maskNoise = tex('https://cdn.jsdelivr.net/gh/tadasba329/BA329-NEUE@dcf0c645a3ccf922a40c2d617efdd91a28e4fde5/noise-mask-v2.jpg', false, true);
-
-  function applyRepeat(){
-    const r = 1 / settings.textureSize;
-    [mapColor, mapNormal, mapRough].forEach(t => t.repeat.set(r, r));
-  }
-  applyRepeat();
 
   const emptyTex = track(new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1));
   emptyTex.needsUpdate = true;
@@ -370,7 +372,6 @@ async function initScene(){
     uRadius:        { value: settings.radius },
     uFeather:       { value: settings.feather },
     uMask:          { value: maskNoise },
-    uTexStrength:   { value: settings.textureStrength },
     uTime:          { value: 0 },
     uInkStrength:   { value: settings.inkStrength },
     uInkSpeed:      { value: settings.inkSpeed },
@@ -397,55 +398,41 @@ async function initScene(){
 
   /* ------------------------------------------------------------ materials -- */
 
-  // Shared concrete material. `receiveBakedShadow` is only true for the backdrop.
+  // Untextured surface. `receiveBakedShadow` is only true for the backdrop.
   function makeConcrete(receiveBakedShadow){
     const m = new THREE.MeshStandardMaterial({
       color: new THREE.Color(settings.baseColor),
-      map: mapColor,
-      normalMap: mapNormal,
-      roughnessMap: mapRough,
       roughness: settings.roughness,
       metalness: 0.0,
-      normalScale: new THREE.Vector2(settings.normalStrength, settings.normalStrength),
     });
 
+    // the statue material needs no injection here at all any more
+    if (!receiveBakedShadow) return track(m);
+
     m.onBeforeCompile = (shader) => {
-      shader.uniforms.uTexStrength = u.uTexStrength;
+      shader.uniforms.uBakeMap       = u.uBakeMap;
+      shader.uniforms.uBakeMatrix    = u.uBakeMatrix;
+      shader.uniforms.uShadowOpacity = u.uShadowOpacity;
+      shader.uniforms.uShadowFalloff = u.uShadowFalloff;
+      shader.uniforms.uGlobalReveal  = u.uGlobalReveal;
 
-      let mapChunk = `
-        #ifdef USE_MAP
-          vec4 sampledDiffuseColor = texture2D( map, vMapUv );
-          sampledDiffuseColor.rgb = mix( vec3(1.0), sampledDiffuseColor.rgb, uTexStrength );
-          diffuseColor *= sampledDiffuseColor;
-        #endif
-      `;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>',
+          '#include <common>\nuniform mat4 uBakeMatrix;\nvarying vec2 vBakeUv;')
+        .replace('#include <begin_vertex>', `
+          #include <begin_vertex>
+          vec4 bakeWorldPos = modelMatrix * vec4( transformed, 1.0 );
+          vBakeUv = ( uBakeMatrix * bakeWorldPos ).xy * 0.5 + 0.5;
+        `);
 
-      let fragCommon = 'uniform float uTexStrength;';
-
-      if (receiveBakedShadow){
-        shader.uniforms.uBakeMap       = u.uBakeMap;
-        shader.uniforms.uBakeMatrix    = u.uBakeMatrix;
-        shader.uniforms.uShadowOpacity = u.uShadowOpacity;
-        shader.uniforms.uShadowFalloff = u.uShadowFalloff;
-        shader.uniforms.uGlobalReveal  = u.uGlobalReveal;
-
-        shader.vertexShader = shader.vertexShader
-          .replace('#include <common>',
-            '#include <common>\nuniform mat4 uBakeMatrix;\nvarying vec2 vBakeUv;')
-          .replace('#include <begin_vertex>', `
-            #include <begin_vertex>
-            vec4 bakeWorldPos = modelMatrix * vec4( transformed, 1.0 );
-            vBakeUv = ( uBakeMatrix * bakeWorldPos ).xy * 0.5 + 0.5;
-          `);
-
-        fragCommon += `
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `#include <common>
           varying vec2 vBakeUv;
           uniform sampler2D uBakeMap;
           uniform float uShadowOpacity, uShadowFalloff, uGlobalReveal;
-        `;
-
+        `)
         // one texture fetch replaces two shadow-map lookups + two light loops
-        mapChunk += `
+        .replace('#include <map_fragment>', `
           {
             vec2 bakeUv = vBakeUv;
             float inBounds = step(0.0, bakeUv.x) * step(bakeUv.x, 1.0)
@@ -455,12 +442,7 @@ async function initScene(){
             shade = clamp(shade, 0.0, 0.92) * inBounds * smoothstep(0.0, 1.0, uGlobalReveal);
             diffuseColor.rgb *= (1.0 - shade);
           }
-        `;
-      }
-
-      shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\n' + fragCommon)
-        .replace('#include <map_fragment>', mapChunk);
+        `);
     };
 
     return track(m);
@@ -563,14 +545,6 @@ async function initScene(){
   /* ------------------------------------------------------------ backdrop -- */
 
   const bgGeo = track(new THREE.PlaneGeometry(30, 30));
-  {
-    const pos = bgGeo.attributes.position;
-    const uv = new Float32Array(pos.count * 2);
-    for (let i = 0; i < pos.count; i++){
-      uv[i * 2] = pos.getX(i); uv[i * 2 + 1] = pos.getY(i);
-    }
-    bgGeo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-  }
 
   const bgMat = makeConcrete(true);
   const bg = new THREE.Mesh(bgGeo, bgMat);
@@ -880,7 +854,6 @@ async function initScene(){
   let disposed = false;
   let loopReady = false;
   let idleSettled = false;
-  let catchupDone = false;
   let inkDropFn = null, revealFn = null, hideFn = null;
   let gui = null;
 
@@ -983,15 +956,10 @@ async function initScene(){
       const center = new THREE.Vector3(); unionBB.getCenter(center);
       const fit = settings.modelFit / Math.max(size.x, size.y, 1e-6);
 
+      // no uv attribute: nothing samples a texture on the statue any more
       geos.forEach((g) => {
         g.translate(-center.x, -center.y, -unionBB.min.z);
         g.scale(fit, fit, fit);
-        const pos = g.attributes.position;
-        const uv = new Float32Array(pos.count * 2);
-        for (let i = 0; i < pos.count; i++){
-          uv[i * 2] = pos.getX(i); uv[i * 2 + 1] = pos.getY(i);
-        }
-        g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
       });
 
       // ONE draw call instead of one per source mesh
@@ -1209,6 +1177,16 @@ async function initScene(){
   let canvasRect = canvas.getBoundingClientRect();
   let baseDistance = 3.4;
 
+  // The canvas rect is needed to map the pointer, and it does move when the
+  // page scrolls. Flag it stale and re-read lazily — one layout read per frame
+  // at most, and it never touches the camera, so nothing shifts on scroll.
+  let rectDirty = false;
+  function getRect(){
+    if (rectDirty){ canvasRect = canvas.getBoundingClientRect(); rectDirty = false; }
+    return canvasRect;
+  }
+  on(window, 'scroll', () => { rectDirty = true; }, { passive: true });
+
   function measure(){
     let w = 0, h = 0;
     if (CONFIG.sizeFromCanvas){
@@ -1230,22 +1208,6 @@ async function initScene(){
     return { w: Math.max(1, w), h: Math.max(1, h) };
   }
 
-  // How far the visible slice of the canvas is offset from the canvas box
-  // centre, converted to world units. Zero when the whole canvas is on screen.
-  function viewportAnchorOffset(d, tanV){
-    if (!settings.anchorToViewport) return 0;
-    const r = canvas.getBoundingClientRect();
-    if (!r.height) return 0;
-    const vh = window.innerHeight || r.height;
-    const top    = Math.max(r.top, 0);
-    const bottom = Math.min(r.bottom, vh);
-    if (bottom <= top) return 0;
-    const visibleCentre = (top + bottom) / 2;
-    const boxCentre     = (r.top + r.bottom) / 2;
-    const worldPerPx    = (2 * d * tanV) / r.height;
-    return (visibleCentre - boxCentre) * worldPerPx;
-  }
-
   // 'cover' holds the camera at a fixed distance, so the statue keeps the same
   // apparent height everywhere and modelScale directly controls how big it
   // reads. 'contain' pulls back on narrow viewports so nothing crops.
@@ -1264,7 +1226,7 @@ async function initScene(){
     }
     d = Math.max(d, settings.minDistance);
 
-    const camY = settings.cameraOffsetY + viewportAnchorOffset(d, tanV);
+    const camY = settings.cameraOffsetY;
 
     camera.position.set(0, camY, d);
     camera.lookAt(0, camY, 0);
@@ -1281,6 +1243,7 @@ async function initScene(){
   function resize(){
     const { w, h } = measure();
     canvasRect = canvas.getBoundingClientRect();
+    rectDirty = false;
 
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
@@ -1460,43 +1423,11 @@ async function initScene(){
   const easeOutCubic = k => 1 - Math.pow(1 - k, 3);
   const smooth = k => k * k * (3 - 2 * k);
 
-  const revealTarget = document.querySelector(settings.revealTargetSelector) || canvas;
-  let revealGoal = 0;
-  let manualOverride = false;
-  let scrollQueued = false;
-
-  function visibleFraction(el){
-    const r = el.getBoundingClientRect();
-    const vh = window.innerHeight;
-    const visible = Math.min(r.bottom, vh) - Math.max(r.top, 0);
-    return Math.max(0, Math.min(visible, r.height)) / Math.max(r.height, 1);
-  }
-
-  function updateScrollReveal(){
-    if (manualOverride) return;
-    const f = visibleFraction(revealTarget);
-    const span = Math.max(settings.revealEnd - settings.revealStart, 0.0001);
-    const k = Math.min(Math.max((f - settings.revealStart) / span, 0), 1);
-    revealGoal = smooth(k);
-  }
-
-  // rAF-throttled: getBoundingClientRect on every scroll event forces layout
-  on(window, 'scroll', () => {
-    manualOverride = false;
-    if (scrollQueued) return;
-    scrollQueued = true;
-    requestAnimationFrame(() => {
-      scrollQueued = false;
-      canvasRect = canvas.getBoundingClientRect();
-      updateScrollReveal();
-      // the visible slice of the canvas changes as it scrolls, so the
-      // vertical anchor has to follow it
-      if (settings.anchorToViewport) fitCamera();
-      idleSettled = false;
-    });
-  }, { passive: true });
-  on(window, 'resize', updateScrollReveal);
-  updateScrollReveal();
+  // The scene is static: nothing reads scroll position, so nothing shifts as
+  // the page moves. revealModel() / hideModel() are still there if you ever
+  // want to drive it from your own trigger.
+  let revealGoal = settings.startRevealed ? 1 : 0;
+  u.uGlobalReveal.value = revealGoal;
 
   /* ---------------------------------------------------------------- drops -- */
 
@@ -1656,8 +1587,8 @@ async function initScene(){
     };
     idleSettled = false;
   };
-  revealFn = () => { manualOverride = true; revealGoal = 1; idleSettled = false; };
-  hideFn   = () => { manualOverride = true; revealGoal = 0; idleSettled = false; };
+  revealFn = () => { revealGoal = 1; idleSettled = false; };
+  hideFn   = () => { revealGoal = 0; idleSettled = false; };
 
   window.inkDrop = inkDropFn;
   window.revealModel = revealFn;
@@ -1675,7 +1606,7 @@ async function initScene(){
   // mapped through the canvas rect, not the window — this is what made the
   // hover hole drift away from the cursor inside Webflow layouts
   function setMouse(clientX, clientY){
-    const r = canvasRect;
+    const r = getRect();
     if (!r || !r.width || !r.height) return;
     const x = (clientX - r.left) / r.width;
     const y = (clientY - r.top) / r.height;
@@ -1706,7 +1637,6 @@ async function initScene(){
 
       const fFrame = gui.addFolder('Framing');
       fFrame.add(settings, 'fitMode', ['cover', 'contain']).name('Fit mode').onChange(W(fitCamera));
-      fFrame.add(settings, 'anchorToViewport').name('Centre on viewport').onChange(W(fitCamera));
       fFrame.add(settings, 'fitMargin', 1, 2, 0.01).name('Margin').onChange(W(fitCamera));
       fFrame.add(settings, 'minDistance', 0.5, 8, 0.01).name('Min distance').onChange(W(fitCamera));
       fFrame.add(settings, 'cameraOffsetY', -1, 1, 0.01).name('Vertical offset').onChange(W(fitCamera));
@@ -1723,12 +1653,6 @@ async function initScene(){
         .onChange(W(() => { applyModelTransform(); scheduleRebake(); }));
 
       const fSurf = gui.addFolder('Surface');
-      fSurf.add(settings, 'textureSize', 0.1, 4, 0.01).name('Texture size').onChange(W(applyRepeat));
-      fSurf.add(settings, 'textureStrength', 0, 1, 0.01).name('Texture strength')
-        .onChange(W(v => u.uTexStrength.value = v));
-      fSurf.add(settings, 'normalStrength', 0, 3, 0.01).name('Normal strength').onChange(W(v => {
-        bgMat.normalScale.set(v, v); modelMat.normalScale.set(v, v);
-      }));
       fSurf.add(settings, 'roughness', 0, 1, 0.01).name('Roughness (background)')
         .onChange(W(v => bgMat.roughness = v));
       fSurf.addColor(settings, 'baseColor').name('Base color').onChange(W(v => {
@@ -1789,8 +1713,6 @@ async function initScene(){
       fLiq.close();
 
       const fRev = gui.addFolder('Reveal');
-      fRev.add(settings, 'revealStart', 0, 1, 0.01).name('Start').onChange(W(updateScrollReveal));
-      fRev.add(settings, 'revealEnd', 0, 1, 0.01).name('End').onChange(W(updateScrollReveal));
       fRev.add(settings, 'revealSmoothing', 0.01, 1, 0.01).name('Smoothing');
       fRev.add({ reveal(){ revealFn(); } }, 'reveal').name('Force reveal');
       fRev.add({ hide(){ hideFn(); } }, 'hide').name('Force hide');
@@ -1880,8 +1802,7 @@ async function initScene(){
     u.uMouseWorld.value.lerp(hasMouse ? mouseTarget : away, 1 - Math.exp(-6 * dt));
     u.uTime.value += dt;
 
-    if (!catchupDone && Math.abs(revealGoal - u.uGlobalReveal.value) < 0.01) catchupDone = true;
-    const sm = Math.max(catchupDone ? settings.revealSmoothing : settings.revealCatchupSmoothing, 0.0001);
+    const sm = Math.max(settings.revealSmoothing, 0.0001);
     u.uGlobalReveal.value += (revealGoal - u.uGlobalReveal.value) * (1 - Math.exp(-dt / sm));
 
     updateDrops(u.uTime.value);
