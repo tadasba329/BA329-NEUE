@@ -78,7 +78,7 @@ const CONFIG = {
   errorSelector:       '#gl-error',
   initDelayMs:         0,
   autoDestroyCheckMs:  2000,
-  showControlPanel:    false,
+  showControlPanel:    true,
 
   // adaptive quality
   autoQuality:         true,
